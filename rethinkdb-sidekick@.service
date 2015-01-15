@@ -1,0 +1,36 @@
+[Unit]
+Description=RethinkDB sidekick %i
+
+# Requirements
+Requires=etcd.service
+Requires=rethinkdb@%i.service
+
+# Dependency ordering and binding
+After=etcd.service
+After=rethinkdb@%i.service
+BindsTo=rethinkdb@%i.service
+
+[Service]
+
+# Get CoreOS environmental variables
+EnvironmentFile=/etc/environment
+
+# Start
+## Test whether service is accessible and then register useful information
+ExecStart=/bin/bash -c '\
+  while true; do \
+    curl -f ${COREOS_PUBLIC_IPV4}:8080; \
+    if [ $? -eq 0 ]; then \
+      etcdctl set /services/rethinkdb/fresh \'${COREOS_PUBLIC_IPV4}:29015\' --ttl 5; \
+      etcdctl set /services/rethinkdb/${COREOS_PUBLIC_IPV4} \'{"host": "%H", "ipv4_addr": "${COREOS_PUBLIC_IPV4}", "port": 28015}\' --ttl 5; \
+    else \
+      etcdctl rm /services/rethinkdb/${COREOS_PUBLIC_IPV4}; \
+    fi; \
+    sleep 3; \
+  done'
+
+# Stop
+ExecStop=/usr/bin/etcdctl rm /services/rethinkdb/${COREOS_PUBLIC_IPV4}
+
+[X-Fleet]
+MachineOf=rethinkdb@%i.service

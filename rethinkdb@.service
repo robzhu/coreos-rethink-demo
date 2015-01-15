@@ -1,0 +1,48 @@
+[Unit]
+Description=RethinkDB %i
+
+# Requirements
+Requires=etcd.service
+Requires=docker.service
+
+[Service]
+# Let processes take awhile to start up (for first run Docker containers)
+TimeoutStartSec=0
+
+# Change killmode from "control-group" to "none" to let Docker remove work correctly.
+KillMode=none
+
+# Get CoreOS environmental variables
+EnvironmentFile=/etc/environment
+
+# Pre-start and Start
+## Directives with "=-" are allowed to fail without consequence
+ExecStartPre=-/usr/bin/docker kill rethinkdb.%i
+ExecStartPre=-/usr/bin/docker rm rethinkdb.%i
+ExecStartPre=/usr/bin/docker pull dockerfile/rethinkdb
+ExecStartPre=-mkdir /home/core/rethinkdb_data
+
+ExecStart=/bin/bash -c '\
+    ServicePath="services/rethinkdb/fresh"; \
+    FullPath="localhost:4001/v2/keys/$ServicePath"; \
+    echo "Checking to see if there is a RethinkDB cluster registration at $FullPath"; \
+    response=$(curl --write-out %{http_code} --silent --output /dev/null $FullPath); \
+    if [[ $response == 404 ]]; then \
+        echo "There is no existing RethinkDB cluster, creating new cluster..."; \
+        /usr/bin/docker run --name rethinkdb.%i -h `hostname` -p 8080:8080 -p 28015:28015 -p 29015:29015 \
+        -v /home/core/rethinkdb_data:/data dockerfile/rethinkdb \
+        rethinkdb -d /data --bind all --canonical-address ${COREOS_PUBLIC_IPV4}; \
+    else \
+        etcdCluster=$(etcdctl get $ServicePath); \
+        echo "Found existing RethinkDB cluster, connecting to node: $etcdCluster"; \
+        /usr/bin/docker run --name rethinkdb.%i -h `hostname` -p 8080:8080 -p 28015:28015 -p 29015:29015 \
+        -v /home/core/rethinkdb_data:/data dockerfile/rethinkdb \
+        rethinkdb -d /data --bind all --canonical-address ${COREOS_PUBLIC_IPV4} -j $etcdCluster; \
+    fi; '
+
+# Stop
+ExecStop=/usr/bin/docker stop rethinkdb.%i
+
+[X-Fleet]
+# Don't schedule on the same machine as other instances
+Conflicts=rethinkdb@*.service
